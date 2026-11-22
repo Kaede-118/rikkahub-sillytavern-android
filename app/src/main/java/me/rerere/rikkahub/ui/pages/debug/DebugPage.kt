@@ -53,6 +53,7 @@ import me.rerere.hugeicons.stroke.File01
 import me.rerere.hugeicons.stroke.PaintBoard
 import me.rerere.hugeicons.stroke.Wrench01
 import me.rerere.rikkahub.R
+import me.rerere.rikkahub.data.ai.debug.RequestSnapshotStore
 import me.rerere.rikkahub.data.model.Avatar
 import me.rerere.rikkahub.ui.components.ui.UIAvatar
 import me.rerere.rikkahub.ui.components.nav.BackButton
@@ -76,6 +77,7 @@ private enum class DebugTab(
     MAIN(HugeIcons.Bug01, "Main"),
     COLORS(HugeIcons.PaintBoard, "Colors"),
     LOGGING(HugeIcons.File01, "Logging"),
+    SNAPSHOT(HugeIcons.File01, "快照"),
     RECOVERY(HugeIcons.Wrench01, "Recovery");
 
     override val label: String
@@ -118,6 +120,7 @@ fun DebugPage(vm: DebugVM = koinViewModel()) {
                     DebugTab.MAIN -> MainPage(vm)
                     DebugTab.COLORS -> ColorsPage()
                     DebugTab.LOGGING -> Box {}
+                    DebugTab.SNAPSHOT -> SnapshotPage()
                     DebugTab.RECOVERY -> RecoveryPage(vm)
                 }
             }
@@ -460,3 +463,73 @@ private fun Color.toHexString(): String {
     val argb = toArgb()
     return "#%08X".format(argb)
 }
+
+/**
+ * 请求快照页（调试用，最小可用形态）：
+ * 列出私有目录里保留的请求快照，提供「对比最近两份」与「全部删除」。
+ *
+ * 快照由 [RequestSnapshotStore] 在每次请求发出前写入，同一会话只保留最近两份，
+ * 因此这里直接对比最新的两份即可复现「同一会话前后两次请求」的场景。
+ */
+@Composable
+private fun SnapshotPage() {
+    val context = LocalContext.current
+    var files by remember { mutableStateOf(RequestSnapshotStore.files(context)) }
+    var report by remember { mutableStateOf<String?>(null) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(8.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("请求快照", style = MaterialTheme.typography.titleSmall)
+        Text(
+            "每次请求发出前落盘一份，同一会话只保留最近两份。先正常聊一轮、再触发一次主动消息，然后点「对比最近两份」。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = {
+                files = RequestSnapshotStore.files(context)
+                report = RequestSnapshotStore.diff(context)
+            }) {
+                Text("对比最近两份")
+            }
+            Button(onClick = { files = RequestSnapshotStore.files(context) }) {
+                Text("刷新")
+            }
+            Button(onClick = {
+                RequestSnapshotStore.clear(context)
+                files = RequestSnapshotStore.files(context)
+                report = null
+            }) {
+                Text("全部删除")
+            }
+        }
+
+        Text("当前保留 " + files.size + " 份", style = MaterialTheme.typography.bodySmall)
+
+        files.forEach { file ->
+            Text(
+                file.name,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = JetbrainsMono,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        report?.let { text ->
+            HorizontalDivider()
+            Text("对比结果", style = MaterialTheme.typography.titleSmall)
+            Text(
+                text,
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = JetBrainsMono,
+            )
+        }
+    }
+}
+

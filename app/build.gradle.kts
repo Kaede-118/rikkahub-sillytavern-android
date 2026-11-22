@@ -40,6 +40,19 @@ val nativeCmakeVersion = nativeToolchainVersion("rikkahub.cmakeVersion")
 val HD_GUARD_EXPECTED_FACTOR =
     "cc655f7608689bb5fe6003d206f8e38731c2cc0cbade823a83194c58b46efb12"
 
+/**
+ * 是否跳过上面的因子校验。
+ *
+ * fork 构建通常拿不到原始签名口令（CI 里只有 debug keystore），推导出的因子必然
+ * 与 libhdguard.so 内置值不同，校验会直接中断构建。加这个开关只为了让 fork 能出包：
+ * 默认关闭，上游与正式发版行为完全不变；跳过后产出的 APK 无法解密 v2 加密插件。
+ *
+ * 用法：`./gradlew assembleDebug -Phdguard.skipCheck=true`
+ */
+val skipHdGuardCheck = providers.gradleProperty("hdguard.skipCheck")
+    .map { it.trim().equals("true", ignoreCase = true) }
+    .getOrElse(false)
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -231,10 +244,18 @@ android {
         // 配合公开的签名证书即可完整复现密钥派生、解开插件载荷。
         // 因子现由 libhdguard.so 在运行时供给（见 app/src/main/cpp/hdguard.c），
         // 上面算出的 kdfFactor 仍用于校验 native 侧数据的一致性，但不进入 APK。
-        check(kdfFactor == HD_GUARD_EXPECTED_FACTOR) {
-            "[华灯] 签名口令推导出的因子与 libhdguard.so 内置值不一致。" +
-                "两者必须相同，否则 APK 无法解密 v2 插件。" +
-                "请重新生成 hdguard.c 中的 BLOB，或检查 local.properties 的签名口令。"
+        if (skipHdGuardCheck) {
+            logger.warn(
+                "[华灯] 已按 -Phdguard.skipCheck=true 跳过 hdguard 因子校验：" +
+                    "本次产出的 APK 无法解密 v2 加密插件，仅适合调试。"
+            )
+        } else {
+            check(kdfFactor == HD_GUARD_EXPECTED_FACTOR) {
+                "[华灯] 签名口令推导出的因子与 libhdguard.so 内置值不一致。" +
+                    "两者必须相同，否则 APK 无法解密 v2 插件。" +
+                    "请重新生成 hdguard.c 中的 BLOB，或检查 local.properties 的签名口令。" +
+                    "fork 调试可用 -Phdguard.skipCheck=true 跳过。"
+            }
         }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
