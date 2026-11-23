@@ -47,11 +47,16 @@ val HD_GUARD_EXPECTED_FACTOR =
  * 与 libhdguard.so 内置值不同，校验会直接中断构建。加这个开关只为了让 fork 能出包：
  * 默认关闭，上游与正式发版行为完全不变；跳过后产出的 APK 无法解密 v2 加密插件。
  *
- * 用法：`./gradlew assembleDebug -Phdguard.skipCheck=true`
+ * 两种打开方式（任一生效即可；PowerShell 会把 -Phdguard.skipCheck=true 拆成两个参数，
+ * 在 pwsh 里优先用环境变量）：
+ * - 命令行：`./gradlew assembleDebug -Phdguard.skipCheck=true`
+ * - 环境变量：`HDGUARD_SKIP_CHECK=true`
  */
-val skipHdGuardCheck = providers.gradleProperty("hdguard.skipCheck")
-    .map { it.trim().equals("true", ignoreCase = true) }
-    .getOrElse(false)
+val skipHdGuardCheck = listOf(
+    providers.gradleProperty("hdguard.skipCheck").orNull,
+    providers.environmentVariable("HDGUARD_SKIP_CHECK").orNull,
+    gradle.startParameter.projectProperties["hdguard.skipCheck"],
+).any { it?.trim()?.equals("true", ignoreCase = true) == true }
 
 plugins {
     alias(libs.plugins.android.application)

@@ -59,6 +59,8 @@ jobs:
       - name: Build
         env:
           VARIANT: ${{ inputs.variant || 'debug' }}
+          # 与环境变量双保险：-P 参数偶发读不到，两处都置位更稳
+          HDGUARD_SKIP_CHECK: 'true'
         run: |
           chmod +x gradlew
           rm -rf app/build/python/  # 清理之前失败构建的脏缓存
