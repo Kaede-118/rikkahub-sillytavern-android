@@ -131,8 +131,12 @@ object RequestSnapshotStore {
                 put("messages", messages)
             }
         )
+        // 与前一条同会话请求的间隔：间隔过长时上游前缀缓存可能已经过期，
+        // 这是「同样前缀却不命中」最常见的解释，写进 meta 便于事后判断
+        val previousGapSec = secondsSincePrevious(context, shortId(conversationId), stamp(now))
         val meta = buildJsonObject {
             put("time", isoTime(now))
+            put("previousGapSec", previousGapSec ?: -1L)
             put("conversationId", conversationId.orEmpty())
             put("generationType", generationType)
             put("modelId", modelId)
@@ -208,8 +212,8 @@ object RequestSnapshotStore {
         val prefixIdentical = lcp == shortest
 
         val sb = StringBuilder()
-        sb.appendLine("A（较早）：${older.name}")
-        sb.appendLine("B（较新）：${newer.name}")
+        sb.appendLine("A（较早）：${older.name}${gapSuffix(a)}")
+        sb.appendLine("B（较新）：${newer.name}${gapSuffix(b)}")
         sb.appendLine("A 总长 ${aText.length} 字符 ≈ ${estimateTokens(aText)} tokens")
         sb.appendLine("B 总长 ${bText.length} 字符 ≈ ${estimateTokens(bText)} tokens")
         sb.appendLine("最长公共前缀：$lcp 字符 ≈ ${estimateTokens(aText.substring(0, lcp))} tokens")
@@ -271,6 +275,16 @@ object RequestSnapshotStore {
     }
 
     // ---------------------------------------------------------------- 内部实现
+
+    /** 渲染「距上一次同会话请求」的后缀，用于判断缓存是否可能因空闲过期 */
+    private fun gapSuffix(doc: JsonObject): String {
+        val seconds = ((doc["meta"] as? JsonObject)?.get("previousGapSec") as? JsonPrimitive)
+            ?.contentOrNull
+            ?.toLongOrNull()
+            ?: return "（无上一条记录）"
+        if (seconds < 0) return "（无上一条记录）"
+        return "（距上一次请求 ${seconds / 60} 分 ${seconds % 60} 秒）"
+    }
 
     /** 读取快照文件为 JsonObject，失败返回 null */
     private fun readDocument(file: File): JsonObject? = runCatching {
@@ -424,6 +438,25 @@ object RequestSnapshotStore {
     /** ISO8601 时间，写进 meta 供人工辨认 */
     private fun isoTime(millis: Long): String =
         SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).format(Date(millis))
+
+    /**
+     * 上一条同会话请求距本次的间隔（秒）；没有上一条时返回 null。
+     *
+     * 只依据文件名里的时间戳计算，不解析文件内容；[newStamp] 是本次即将写入的时间戳，
+     * 用来排除同一秒内重复写入的情况。
+     */
+    private fun secondsSincePrevious(context: Context, conversationKey: String, newStamp: String): Long? {
+        val previous = files(context).firstOrNull { file ->
+            conversationKey(file.name) == conversationKey && !file.name.startsWith(newStamp)
+        } ?: return null
+        val previousTime = parseStamp(previous.name) ?: return null
+        return ((System.currentTimeMillis() - previousTime) / 1000).coerceAtLeast(0)
+    }
+
+    /** 从文件名前缀解析出时间戳（yyyyMMdd-HHmmss） */
+    private fun parseStamp(fileName: String): Long? =
+        runCatching { SimpleDateFormat(STAMP_PATTERN, Locale.US).parse(fileName.take(15))?.time }
+            .getOrNull()
 
     /** 会话短 id：文件名末尾用它分组，裁剪时无需解析文件内容 */
     private fun shortId(conversationId: String?): String {
