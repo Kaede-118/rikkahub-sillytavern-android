@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.withContext
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import kotlinx.serialization.Serializable
@@ -148,6 +149,8 @@ class GenerationLoop(
         workspaceCwd: String? = null,
         generationType: me.rerere.rikkahub.data.model.GenerationType = me.rerere.rikkahub.data.model.GenerationType.NORMAL,
         maxTokensOverride: Int? = null,
+        // 后台生成（主动消息）：没有界面等用户回答，HITL 工具不挂起而是直接判为拒绝
+        headless: Boolean = false,
     ): Flow<GenerationChunk> = flow {
         val provider = model.findProvider(settings.providers) ?: error("Provider not found")
         val providerImpl = providerManager.getProviderByType(provider)
@@ -294,9 +297,16 @@ class GenerationLoop(
             append(system)
             // 酒馆模式：工具的 systemPrompt 段全部不发，工具仍有 JSON schema 可用
             if (!tavernMode) {
+                // 只拼接真正有内容的工具说明。
+                // 原写法对每个工具都先 appendLine()，工具返回空说明时就会留下一个纯空行——
+                // 空行数量随工具个数变化，工具集一变（如主动消息剔除 ask_user）系统提示词
+                // 就从这里分叉，把后面的全部历史挤出前缀缓存。
                 tools.forEach { tool ->
-                    appendLine()
-                    append(tool.systemPrompt(model, messages))
+                    val toolPrompt = tool.systemPrompt(model, messages)
+                    if (toolPrompt.isNotBlank()) {
+                        appendLine()
+                        append(toolPrompt)
+                    }
                 }
             }
         }
@@ -540,6 +550,15 @@ class GenerationLoop(
                 val updatedTools = uniqueTools.map { tool ->
                     val toolDef = statusTrackedTools.find { it.name == tool.toolName }
                     when {
+                        // 后台生成没有界面可以回答：HITL 工具直接拒掉并回一条理由，
+                        // 让模型自己继续，而不是把整轮挂死。
+                        // 注意必须放在 mustWaitForUser 之前，否则会先被判成 Pending 卡住。
+                        headless && tool.toolName in HITL_TOOL_NAMES -> tool.copy(
+                            approvalState = ToolApprovalState.Denied(
+                                "当前为后台自动生成，用户不在线，无法回答问题。" +
+                                    "请直接根据已有信息继续，不要等待用户确认。"
+                            )
+                        )
                         // HITL 工具（ask_user）必须等用户回答：优先于"自动批准"判定，
                         // 否则自动批准会把它当普通工具放行，问答流被打断
                         mustWaitForUser(tool.toolName, tool.approvalState) -> {
@@ -770,9 +789,16 @@ class GenerationLoop(
             // tavernMode 判断的，这里此前漏了，导致走 fallback 路径时酒馆模式
             // 仍会把全部工具的系统提示词拼进 system，纯净请求不成立。
             if (!tavernMode) {
+                // 只拼接真正有内容的工具说明。
+                // 原写法对每个工具都先 appendLine()，工具返回空说明时就会留下一个纯空行——
+                // 空行数量随工具个数变化，工具集一变（如主动消息剔除 ask_user）系统提示词
+                // 就从这里分叉，把后面的全部历史挤出前缀缓存。
                 tools.forEach { tool ->
-                    appendLine()
-                    append(tool.systemPrompt(model, messages))
+                    val toolPrompt = tool.systemPrompt(model, messages)
+                    if (toolPrompt.isNotBlank()) {
+                        appendLine()
+                        append(toolPrompt)
+                    }
                 }
             }
             }
@@ -1741,7 +1767,7 @@ private fun UIMessage.withStepStats(stepBase: UIMessage?, stepTime: Duration): U
  * @param params 本次请求参数，工具清单位于 TextGenerationParams.tools
  * @param messages 本次实际发送的消息列表（已转义、已裁剪）
  */
-private fun recordRequestSnapshot(
+private suspend fun recordRequestSnapshot(
     context: Context,
     json: Json,
     conversationId: Uuid?,
@@ -1750,7 +1776,13 @@ private fun recordRequestSnapshot(
     model: Model,
     params: TextGenerationParams,
     messages: List<UIMessage>,
-) = runCatching {
+) {
+    // 开关默认关闭：关闭时立刻返回，连 JSON 序列化都不做——整份请求序列化约几十毫秒，
+    // 挂在每次生成的必经路径上会直接影响出字手感（2026-11-23 实测反馈「不如原版流畅」）
+    if (!RequestSnapshotStore.isEnabled(context)) return
+    // 开启后也不占用生成协程：序列化 + 写盘整体切到 IO
+    withContext(Dispatchers.IO) {
+        runCatching {
     // 消息整体序列化：UIMessage 自带 @Serializable，这里用显式 List 序列化器，
     // 避免依赖 reified 推断在某些编译环境下取不到序列化器。
     val messagesJson = json.encodeToJsonElement(
@@ -1801,9 +1833,11 @@ private fun recordRequestSnapshot(
         baseUrl = (provider as? ProviderSetting.ApiKey)?.baseUrl.orEmpty(),
         headers = headers,
         tools = toolsJson,
-        messages = messagesJson,
-    )
-}.getOrNull()
+            messages = messagesJson,
+        )
+        }.getOrNull()
+    }
+}
 
 /** 快照里的鉴权头做掩码，其余原样保留 */
 private fun maskSnapshotHeader(name: String, value: String): String = when (name.lowercase()) {
