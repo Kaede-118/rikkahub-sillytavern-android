@@ -261,7 +261,12 @@ class GenerationLoop(
             add("❌ Do NOT fabricate results — if a tool fails, say so")
             if (hasShell) add("❌ Do NOT use shell when a dedicated tool exists")
             if (hasPython && hasCalculator) add("❌ Do NOT use execute_python for math (use calculator)")
-            if (hasTool("ask_user")) add("✅ If you need user input, use ask_user directly")
+            // 注意：这里不要再按「某个工具是否存在」拼提示行。
+            // 主动消息会剔除 HITL 工具（见 ChatService.generateProactiveMessage 的
+            // filterNot { it.name in HITL_TOOL_NAMES }），若此处随工具出现/消失而变化，
+            // 系统提示词就会在中间某一点分叉，把后面全部历史挤出上游前缀缓存
+            // （实测：公共前缀只剩 1207 token / 全文 ~25000 token）。
+            // ask_user 的用途由工具自身 description 说明，系统提示词不需要重复。
         }
         val assemblerContext = me.rerere.rikkahub.data.ai.prompts.PromptContext(
             identitySection = mainIdentity,
