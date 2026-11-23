@@ -169,7 +169,10 @@ object RequestSnapshotStore {
      * 对比两份快照文件。[older] 视为 A、[newer] 视为 B。
      *
      * 输出覆盖：最长公共前缀（字符与估算 token）、分叉消息下标与 id/role/parts、
-     * 工具分叉位置、系统提示词落段、以及「分叉前是否完全一致」布尔值。
+     * 工具差异（缺失/新增名称或仅顺序变化）、系统提示词落段、以及「分叉前是否完全一致」布尔值。
+     *
+     * 口径上只比较真正会发给上游的内容：meta 整块排除，消息里的客户端专有字段
+     * （随机 id、时间戳、用量统计等）一律剥离——否则每次请求都会在第一条消息处「假分叉」。
      */
     fun diffFiles(older: File, newer: File): String {
         val a = readDocument(older) ?: return "读取失败：${older.name}"
@@ -188,9 +191,10 @@ object RequestSnapshotStore {
         sb.appendLine("B 总长 ${bText.length} 字符 ≈ ${estimateTokens(bText)} tokens")
         sb.appendLine("最长公共前缀：$lcp 字符 ≈ ${estimateTokens(aText.substring(0, lcp))} tokens")
 
+        sb.appendLine("口径：只对比 tools 与 messages，已剔除 meta 和客户端专有字段（id/时间/用量等）")
         val aMessages = a["messages"] as? JsonArray ?: JsonArray(emptyList())
         val bMessages = b["messages"] as? JsonArray ?: JsonArray(emptyList())
-        val messageIndex = firstDiffIndex(aMessages, bMessages)
+        val messageIndex = firstDiffIndex(wireMessages(a), wireMessages(b))
         if (messageIndex < 0) {
             sb.appendLine("分叉点：消息逐条完全一致（${aMessages.size} 条）")
         } else {
@@ -201,14 +205,27 @@ object RequestSnapshotStore {
 
         val aTools = a["tools"] as? JsonArray ?: JsonArray(emptyList())
         val bTools = b["tools"] as? JsonArray ?: JsonArray(emptyList())
-        val toolIndex = firstDiffIndex(aTools, bTools)
-        if (toolIndex < 0) {
-            sb.appendLine("工具：${aTools.size} 个全部一致")
-        } else {
-            sb.appendLine(
-                "工具分叉：第 $toolIndex 个（A=${toolName(aTools.getOrNull(toolIndex)) ?: "-"}" +
-                    " / B=${toolName(bTools.getOrNull(toolIndex)) ?: "-"}），A ${aTools.size} 个 / B ${bTools.size} 个"
-            )
+        val aNames = aTools.mapNotNull { toolName(it) }
+        val bNames = bTools.mapNotNull { toolName(it) }
+        val missing = aNames.filter { it !in bNames }
+        val added = bNames.filter { it !in aNames }
+        when {
+            aNames == bNames -> sb.appendLine("工具：${aNames.size} 个，名称与顺序完全一致")
+
+            missing.isEmpty() && added.isEmpty() -> {
+                val index = firstDiffIndex(aTools, bTools).coerceAtLeast(0)
+                sb.appendLine(
+                    "工具：名称集合一致、但顺序不同（A ${aNames.size} 个 / B ${bNames.size} 个），" +
+                        "首个位置差异在第 $index 个：" +
+                        "${toolName(aTools.getOrNull(index)) ?: "-"} → ${toolName(bTools.getOrNull(index)) ?: "-"}"
+                )
+            }
+
+            else -> {
+                sb.appendLine("工具：A ${aNames.size} 个 / B ${bNames.size} 个")
+                if (missing.isNotEmpty()) sb.appendLine("  A 有而 B 没有：${missing.joinToString(", ")}")
+                if (added.isNotEmpty()) sb.appendLine("  B 有而 A 没有：${added.joinToString(", ")}")
+            }
         }
 
         val aSystem = systemText(aMessages)
@@ -237,16 +254,42 @@ object RequestSnapshotStore {
         json.parseToJsonElement(file.readText(Charsets.UTF_8)) as? JsonObject
     }.getOrNull()
 
-    /** 参与对比的稳定文本：剔除随时间变化的 meta.time，其余按规范化 JSON 拼接 */
+    /** 客户端专有字段：不会出现在上游请求体里，参与对比只会制造假分叉 */
+    private val CLIENT_ONLY_KEYS = setOf(
+        "id", "createdAt", "finishedAt", "modelId", "modelSnapshot",
+        "usage", "lastUsage", "generationTimeMs", "stepCount",
+        "translation", "mvuData", "isContextCheckpoint", "isSynthetic",
+        "annotations",
+    )
+
+    /** 递归剥离客户端专有字段，只留下真正会发给上游的内容 */
+    private fun stripClientOnly(element: JsonElement): JsonElement = when (element) {
+        is JsonObject -> JsonObject(
+            element.entries
+                .filter { it.key !in CLIENT_ONLY_KEYS }
+                .associate { (key, value) -> key to stripClientOnly(value) }
+        )
+
+        is JsonArray -> JsonArray(element.map { stripClientOnly(it) })
+        else -> element
+    }
+
+    /** 剥离客户端字段后的消息数组，用于逐条对比 */
+    private fun wireMessages(doc: JsonObject): JsonArray {
+        val raw = doc["messages"] as? JsonArray ?: JsonArray(emptyList())
+        return JsonArray(raw.map { stripClientOnly(it) })
+    }
+
+    /**
+     * 参与对比的稳定文本：只取请求体真正会带上的 tools 与 messages。
+     *
+     * meta 整体排除——里面的时间、token 估算、headers 每份都不同，放进来会让
+     * 「最长公共前缀」永远停在开头几十个字符，读数毫无意义。
+     */
     private fun stableText(doc: JsonObject): String {
-        val meta = (doc["meta"] as? JsonObject)?.let { m ->
-            JsonObject(m.filterKeys { it != "time" })
-        }
         val stable = buildJsonObject {
-            meta?.let { put("meta", it) }
-            doc["tools"]?.let { put("tools", it) }
-            doc["messages"]?.let { put("messages", it) }
-            doc["truncated"]?.let { put("truncated", it) }
+            doc["tools"]?.let { put("tools", stripClientOnly(it)) }
+            put("messages", wireMessages(doc))
         }
         return canonical(stable)
     }

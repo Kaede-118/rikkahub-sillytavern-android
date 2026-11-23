@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -42,6 +43,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import me.rerere.rikkahub.utils.l10n
 import me.rerere.ui.toast.ToastType
@@ -66,6 +69,7 @@ import me.rerere.rikkahub.ui.context.LocalSettings
 import me.rerere.rikkahub.ui.context.LocalToaster
 import me.rerere.rikkahub.ui.theme.JetbrainsMono
 import org.koin.androidx.compose.koinViewModel
+import java.io.File
 import kotlin.random.Random
 import kotlin.random.nextInt
 import kotlin.uuid.Uuid
@@ -476,6 +480,21 @@ private fun SnapshotPage() {
     val context = LocalContext.current
     var files by remember { mutableStateOf(RequestSnapshotStore.files(context)) }
     var report by remember { mutableStateOf<String?>(null) }
+    // 待导出的文件：先点按钮选文件，再在系统文件选择器里确定保存位置
+    var pendingExport by remember { mutableStateOf<File?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        val target = pendingExport
+        pendingExport = null
+        if (uri != null && target != null) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    out.write(target.readBytes())
+                }
+            }
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -512,13 +531,26 @@ private fun SnapshotPage() {
 
         Text("当前保留 " + files.size + " 份", style = MaterialTheme.typography.bodySmall)
 
+        // 每份快照一个「导出」按钮：走系统文件选择器，不申请存储权限，也不需要 adb
         files.forEach { file ->
-            Text(
-                file.name,
-                style = MaterialTheme.typography.bodySmall,
-                fontFamily = JetbrainsMono,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    file.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = JetbrainsMono,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = {
+                    pendingExport = file
+                    exportLauncher.launch(file.name)
+                }) {
+                    Text("导出")
+                }
+            }
         }
 
         report?.let { text ->
