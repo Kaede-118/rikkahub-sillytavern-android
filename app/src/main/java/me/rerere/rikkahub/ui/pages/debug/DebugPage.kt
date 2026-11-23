@@ -527,7 +527,7 @@ private fun SnapshotPage() {
             Text(
                 text,
                 style = MaterialTheme.typography.bodySmall,
-                fontFamily = JetBrainsMono,
+                fontFamily = JetbrainsMono,
             )
         }
     }
