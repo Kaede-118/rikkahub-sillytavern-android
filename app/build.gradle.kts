@@ -336,6 +336,17 @@ android {
             buildConfigField("String", "VERSION_NAME", "\"${android.defaultConfig.versionName}\"")
             buildConfigField("String", "VERSION_CODE", "\"${android.defaultConfig.versionCode}\"")
         }
+        // 本地专用：沿用 release 的 R8 优化与签名配置，但包名加 .local 后缀，
+        // 这样能和官方版（另一把密钥签名）同机共存，不必卸载丢数据。
+        // 用法：./gradlew assembleLocalRelease（签名读取 local.properties 里的 storeFile 等）
+        create("localRelease") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".local"
+            // 库模块只有 debug/release 两种变体，声明回退否则依赖解析失败
+            matchingFallbacks += listOf("release")
+            buildConfigField("String", "VERSION_NAME", "\"${android.defaultConfig.versionName} (local)\"")
+            buildConfigField("String", "VERSION_CODE", "\"${android.defaultConfig.versionCode}\"")
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
