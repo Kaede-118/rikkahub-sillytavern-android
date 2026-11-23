@@ -70,6 +70,29 @@ object RequestSnapshotStore {
         "工具说明" to listOf("<tools", "工具说明", "可用工具", "Tools"),
     )
 
+    /** 开关存放位置：用独立 SharedPreferences，避免为一个调试开关动 DataStore 迁移 */
+    private const val PREFS_NAME = "debug_request_snapshot"
+
+    private const val KEY_ENABLED = "enabled"
+
+    /**
+     * 是否记录请求快照，默认关闭。
+     *
+     * 关闭时调用方必须在序列化之前就返回——整份请求序列化约几十毫秒、
+     * 瞬时内存几十 KB，挂在每次生成的热路径上会直接影响出字手感。
+     */
+    fun isEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_ENABLED, false)
+
+    /** 切换记录开关 */
+    fun setEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_ENABLED, enabled)
+            .apply()
+    }
+
     /** 快照目录，不存在时创建 */
     fun dir(context: Context): File =
         File(context.filesDir, DIR_NAME).apply { if (!exists()) mkdirs() }

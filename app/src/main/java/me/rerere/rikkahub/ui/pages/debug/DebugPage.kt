@@ -24,6 +24,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -481,6 +482,7 @@ private fun SnapshotPage() {
     var files by remember { mutableStateOf(RequestSnapshotStore.files(context)) }
     var report by remember { mutableStateOf<String?>(null) }
     // 待导出的文件：先点按钮选文件，再在系统文件选择器里确定保存位置
+    var enabled by remember { mutableStateOf(RequestSnapshotStore.isEnabled(context)) }
     var pendingExport by remember { mutableStateOf<File?>(null) }
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
@@ -503,9 +505,29 @@ private fun SnapshotPage() {
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("请求快照", style = MaterialTheme.typography.titleSmall)
+        // 开关默认关闭：关闭时连序列化都不做，避免拖慢正常聊天
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("记录请求快照", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "关闭时不序列化也不落盘，零性能影响",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = enabled,
+                onCheckedChange = { value ->
+                    enabled = value
+                    RequestSnapshotStore.setEnabled(context, value)
+                },
+            )
+        }
         Text(
-            "每次请求发出前落盘一份，同一会话只保留最近两份。先正常聊一轮、再触发一次主动消息，然后点「对比最近两份」。",
+            "开启后每次请求发出前落盘一份，同一会话只保留最近两份。先正常聊一轮、再触发一次主动消息，然后点「对比最近两份」。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
