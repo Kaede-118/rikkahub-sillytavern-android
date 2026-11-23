@@ -48,6 +48,9 @@ object RequestSnapshotStore {
     /** 文件名里的时间戳格式 */
     private const val STAMP_PATTERN = "yyyyMMdd-HHmmss"
 
+    /** 换行符：单独定义，避免字符串模板里的转义写错 */
+    private val NEWLINE = "\n"
+
     /** 与业务无关的宽松解析器：只用于读回自己写的快照 */
     private val json = Json {
         ignoreUnknownKeys = true
@@ -252,7 +255,7 @@ object RequestSnapshotStore {
     private fun canonical(element: JsonElement): String = when (element) {
         is JsonObject -> element.entries
             .sortedBy { it.key }
-            .joinToString(",", "{", "}") { (key, value) -> ""$key":${canonical(value)}" }
+            .joinToString(",", "{", "}") { (key, value) -> "\"$key\":${canonical(value)}" }
 
         is JsonArray -> element.joinToString(",", "[", "]") { canonical(it) }
         else -> element.toString()
@@ -298,8 +301,7 @@ object RequestSnapshotStore {
             val role = (obj["role"] as? JsonPrimitive)?.contentOrNull ?: continue
             if (!role.equals("system", ignoreCase = true)) continue
             val parts = obj["parts"] as? JsonArray ?: return ""
-            return parts.joinToString("
-") { part ->
+            return parts.joinToString(NEWLINE) { part ->
                 val partObj = part as? JsonObject
                 (partObj?.get("text") as? JsonPrimitive)?.contentOrNull ?: ""
             }
